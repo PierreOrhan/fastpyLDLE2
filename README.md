@@ -1,3 +1,8 @@
+Development of a fast implementation of LPCA algorithm.
+
+
+Original Repo README:
+
 pyLDLE2
 ========
 
