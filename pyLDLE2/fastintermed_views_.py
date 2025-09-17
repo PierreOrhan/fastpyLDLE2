@@ -15,6 +15,7 @@ import itertools
 
 import queue
 import copy
+import torch
 
 # merging s to m
 def merging_cost(s, m, Utilde_s, Utilde_m, d_e, local_param, intermed_opts):
@@ -32,11 +33,28 @@ def merging_cost(s, m, Utilde_s, Utilde_m, d_e, local_param, intermed_opts):
 
 
 # Computes cost_k, d_k (dest_k)
-def cost_of_moving(k, d_e, neigh_ind_k, U_k, local_param, c, n_C,
+def batch_cost_of_moving(U,U_, local_param, c, n_C,
                    Utilde, eta_min, eta_max, intermed_opts):
-    c_k = c[k]
+    """
+        c:  cluster assignments
+        n_c: size of each cluster
+    """
+    #TODO
+    # We first list all faisable (k,m) pairs:
+
+    # For each of this pair, we compute the new U.
+    # We then padd all the U in order to make the batched computation feasible.
+    
+    # Then we evaluate the cost of each of these movement.
+    
+    # Finally we reshape these cost and take the best movement for every k
+    
+          
+
+
     # Compute |C_{c_k}|
-    n_C_c_k = n_C[c_k]
+    n_C_c_k = n_C[c]
+
     
     # Check if |C_{c_k}| < eta_{min}
     # If not then c_k is already
@@ -45,11 +63,13 @@ def cost_of_moving(k, d_e, neigh_ind_k, U_k, local_param, c, n_C,
         return np.inf, -1
     
     # Compute neighboring clusters c_{U_k} of x_k
-    c_U_k = c[neigh_ind_k]
+
+    c_U_k = c[U]
+
     c_U_k_uniq = np.unique(c_U_k).tolist()
     cost_x_k_to = np.zeros(len(c_U_k_uniq)) + np.inf
 
-    U_k_list = list(U_k)
+    U_k_list = list(U_)
     
     # Iterate over all m in c_{U_k}
     i = 0
@@ -84,6 +104,11 @@ def cost_of_moving(k, d_e, neigh_ind_k, U_k, local_param, c, n_C,
                                                  local_param.eval_({'view_index': m, 'data_mask': U_k_list}))
                 
         i += 1
+
+    ### Batch version:
+    S = 
+
+
     
     # find the cluster with minimum cost
     # to move x_k in.
@@ -96,7 +121,7 @@ def cost_of_moving(k, d_e, neigh_ind_k, U_k, local_param, c, n_C,
         
     return cost_k, dest_k
 
-class IntermedViews:
+class FastIntermedViews:
     def __init__(self, exit_at, verbose=True, debug=False):
         self.exit_at = exit_at
         self.verbose = verbose
@@ -117,95 +142,45 @@ class IntermedViews:
                                               self.local_start_time, 
                                               self.global_start_time)
     
-    def best(self, d, d_e, U, neigh_ind_, local_param, intermed_opts):
-        n = d_e.shape[0]
-        c = np.arange(n)
-        n_C = np.zeros(n) + 1
+    def best(self, d, U, local_param, intermed_opts):
+        """
+            U: before was the mask, now (N,k_nn) indices of neighbors
+        """
+        n = U.shape[0]
+        c = torch.arange(n,device="cuda")
+        n_C = torch.zeros(n,dtype=torch.float32,device="cuda") + 1
         Clstr = list(map(set, np.arange(n).reshape((n,1)).tolist()))
-        indices = U.indices
-        indptr = U.indptr
-        Utilde = []
-        U_ = []
-        neigh_ind = []
-        for i in range(n):
-            col_inds = indices[indptr[i]:indptr[i+1]]
-            Utilde.append(set(col_inds))
-            U_.append(set(col_inds))
-            neigh_ind.append(col_inds)
         
-        neigh_ind = np.array(neigh_ind)
+        U_ = U.clone()
+        Utilde = U.clone()
+        # indices = U.reshape(-1)
+        # # indptr = U.indptr
+        # Utilde = []
+        # U_ = []
+        # neigh_ind = []
+        # for i in range(n):
+        #     col_inds = indices[indptr[i]:indptr[i+1]]
+        #     Utilde.append(set(col_inds))
+        #     U_.append(set(col_inds))
+        #     neigh_ind.append(col_inds)
+        # neigh_ind = np.array(neigh_ind)
+
+
         eta_max = intermed_opts['eta_max']
         n_proc = intermed_opts['n_proc']
         
         cost = np.zeros(n)+np.inf
         dest = np.zeros(n,dtype='int')-1
-        
-        shm_cost = shared_memory.SharedMemory(create=True, size=cost.nbytes)
-        np_cost = np.ndarray(cost.shape, dtype=cost.dtype, buffer=shm_cost.buf)
-        np_cost[:] = cost[:]
-        shm_dest = shared_memory.SharedMemory(create=True, size=dest.nbytes)
-        np_dest = np.ndarray(dest.shape, dtype=dest.dtype, buffer=shm_dest.buf)
-        np_dest[:] = dest[:]
-        
-        shm_cost_name = shm_cost.name
-        cost_shape = cost.shape
-        cost_dtype = cost.dtype
-        shm_dest_name = shm_dest.name
-        dest_shape = dest.shape
-        dest_dtype = dest.dtype
-        
+
         
         # Vary eta from 2 to eta_{min}
         self.log('Constructing intermediate views.')
         for eta in range(2,intermed_opts['eta_min']+1):
-            self.log('eta = %d.' % eta)
-            self.log('#non-empty views with sz < %d = %d' % (eta, np.sum((n_C > 0)*(n_C < eta))))
-            self.log('#nodes in views with sz < %d = %d' % (eta, np.sum(n_C[c]<eta)))
-            
-            # Compute cost_k and d_k (dest_k) for all k
-            ###########################################
-            # Proc for computing the cost and dest
-            def target_proc(p_num, chunk_sz, n_, Utilde, n_C, c, S):
-                existing_shm_cost = shared_memory.SharedMemory(name=shm_cost_name)
-                cost_ = np.ndarray(cost_shape, dtype=cost_dtype, buffer=existing_shm_cost.buf)
-                existing_shm_dest = shared_memory.SharedMemory(name=shm_dest_name)
-                dest_ = np.ndarray(dest_shape, dtype=dest_dtype, buffer=existing_shm_dest.buf)
-                
-                start_ind = p_num*chunk_sz
-                if p_num == (n_proc-1):
-                    end_ind = n_
-                else:
-                    end_ind = (p_num+1)*chunk_sz
-                
-                for k in range(start_ind, end_ind):
-                    if S is None:
-                        k1 = k
-                    else:
-                        k1 = S[k]
-                    cost_[k1], dest_[k1] = cost_of_moving(k1, d_e, neigh_ind[k1], U_[k1], local_param,
-                                                          c, n_C, Utilde, eta, eta_max, intermed_opts)
-                
-                existing_shm_cost.close()
-                existing_shm_dest.close()
-            
-            ###########################################
-            # Parallel cost and dest computation
-            proc = []
-            chunk_sz = int(n/n_proc)
-            for p_num in range(n_proc):
-                proc.append(mp.Process(target=target_proc,
-                                       args=(p_num,chunk_sz,n,Utilde,n_C,c,None),
-                                       daemon=True))
-                proc[-1].start()
-                
-            for p_num in range(n_proc):
-                proc[p_num].join()
-            ###########################################
+           
             
             # Sequential version of above
-            # for k in range(n):
-            #     cost[k], dest[k] = cost_of_moving(k, d_e, neigh_ind[k], U_[k], local_param,
-            #                                       c, n_C, Utilde, eta, eta_max)
+            cost, dest = batch_cost_of_moving( U, U_, local_param,
+                                                  c, n_C, Utilde, eta, eta_max,intermed_opts)
             
             # Compute point with minimum cost
             # Compute k and cost^* 
@@ -388,19 +363,17 @@ class IntermedViews:
         q_.close()
         return c, n_C
     
-    def fit(self, d, d_e, U, local_param, intermed_opts):
-        
-        
-        n = d_e.shape[0]
+    def fit(self, d, U, local_param, intermed_opts):
+
+
+        n = U.shape[0]
         if (intermed_opts['eta_min'] > 1) or (intermed_opts['c'] is not None):
             if intermed_opts['c'] is None:
-                neigh_ind = []
-                for i in range(n):
-                    neigh_ind.append(U[i,:].indices.tolist())
+                neigh_ind = U
                 if intermed_opts['algo'] == 'best':
-                    c, n_C = self.best(d, d_e, U, neigh_ind, local_param, intermed_opts)
+                    c, n_C = self.best(d, U, local_param, intermed_opts)
                 else:
-                    c, n_C = self.match_n_merge(d, d_e, U, neigh_ind, local_param, intermed_opts)
+                    c, n_C = self.match_n_merge(d, U, local_param, intermed_opts)
             else:
                 c = intermed_opts['c']
                 n_C = np.zeros(c.shape[0], dtype=int)

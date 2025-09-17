@@ -2,7 +2,6 @@ LICENSE
 README.md
 pyproject.toml
 pyLDLE2/__init__.py
-pyLDLE2/_trash_.py
 pyLDLE2/buml_.py
 pyLDLE2/datasets.py
 pyLDLE2/gl_.py
@@ -12,7 +11,6 @@ pyLDLE2/intermed_views_.py
 pyLDLE2/ipge_.py
 pyLDLE2/l1pca_optimal_.py
 pyLDLE2/local_views_.py
-pyLDLE2/private_global_reg_.py
 pyLDLE2/util_.py
 pyLDLE2/visualize_.py
 pyLDLE2/visualize_all.py

@@ -460,7 +460,7 @@ class Datasets:
         tv = np.array(tv)    
         heightv = np.random.uniform(0,sideL2,n)[:,np.newaxis]
         heightv = heightv.flatten('F')[:,np.newaxis]
-        tv = tv[:,np.newaxis]
+        # tv = tv[:,np.newaxis]
         X=np.concatenate([rmax*tv*np.cos(tv), heightv, rmax*tv*np.sin(tv)], axis=1)
         
         ddX11 = np.minimum(heightv, sideL2-heightv).flatten()

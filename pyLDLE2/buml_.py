@@ -8,6 +8,8 @@ from sklearn.neighbors import NearestNeighbors, KNeighborsTransformer
 from scipy.sparse import csr_matrix
 
 from . import local_views_
+from . import fastlocal_views_
+from . import fastintermed_views_
 from . import intermed_views_
 from . import global_views_
 from . import visualize_
@@ -720,21 +722,29 @@ class BUML:
                 # enforce self-distance to be zero.
                 neigh_dist[k,0] = 0
         
-        d_e = sparse_matrix(neigh_ind, neigh_dist)
-        d_e = d_e.maximum(d_e.transpose())
+        import torch
+
+        ## We don't use d_e anymore in this code:
+        # neigh_row = torch.stack([torch.arange(neigh_ind.shape[0],device="cuda")[:,None].repeat((1,neigh_ind.shape[1])),
+        #                         neigh_ind], dim=0)
+        # d_e = torch.sparse_coo_tensor(indices= neigh_row.reshape(2,-1),
+        #                         values = neigh_dist.reshape(-1))
+        # d_e_small = torch.sparse_coo_tensor(indices= neigh_row.reshape(2,-1),
+        #                         values = neigh_dist.reshape(-1))
+
+        # d_e = d_e.maximum(d_e.transpose())
         
-        # to compute far off points
-        d_e_small = sparse_matrix(neigh_ind[:,:self.local_opts['k']],
-                                  neigh_dist[:,:self.local_opts['k']])
-        d_e_small = d_e_small.maximum(d_e_small.transpose())
+        # # to compute far off points
+        # d_e_small = sparse_matrix(neigh_ind[:,:self.local_opts['k']],
+        #                           neigh_dist[:,:self.local_opts['k']])
+        # d_e_small = d_e_small.maximum(d_e_small.transpose())
 
         neigh_ind = neigh_ind[:,:self.local_opts['k_nn']]
         neigh_dist = neigh_dist[:,:self.local_opts['k_nn']]
-        
-        
+                
         # Construct low dimensional local views
-        self.LocalViews = local_views_.LocalViews(self.exit_at, self.verbose, self.debug)
-        self.LocalViews.fit(self.d, data, d_e, neigh_dist, neigh_ind, ddX, self.local_opts)
+        self.LocalViews = fastlocal_views_.FastLocalViews(self.exit_at, self.verbose, self.debug)
+        self.LocalViews.fit(self.d, data, neigh_dist, neigh_ind, ddX, self.local_opts)
         
         # Halving distance matrix
         if ddX is not None:
@@ -742,8 +752,8 @@ class BUML:
             d_e = d_e[:n,:n]
             
         if self.debug:
-            self.d_e = d_e
-            self.d_e_small = d_e_small
+            # self.d_e = d_e
+            # self.d_e_small = d_e_small
             self.neigh_ind = neigh_ind
             self.neigh_dist = neigh_dist
         
@@ -751,8 +761,8 @@ class BUML:
             return
         
         # Construct intermediate views
-        self.IntermedViews = intermed_views_.IntermedViews(self.exit_at, self.verbose, self.debug)
-        self.IntermedViews.fit(self.d, d_e, self.LocalViews.U,
+        self.IntermedViews = fastintermed_views_.FastIntermedViews(self.exit_at, self.verbose, self.debug)
+        self.IntermedViews.fit(self.d, self.LocalViews.U,
                               self.LocalViews.local_param_post,
                               self.intermed_opts)
         
